@@ -1,0 +1,14 @@
+# Render Blueprint: backend API only.
+services:
+  - type: web
+    name: anemoscan-binary-backend
+    runtime: docker
+    dockerfilePath: ./api/Dockerfile
+    dockerContext: ./api
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
