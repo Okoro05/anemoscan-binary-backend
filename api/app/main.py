@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from . import inference
+from .admin_routes import router as admin_router
 from .config import settings
 from .db import init_db
 from .routes import router
@@ -28,9 +29,11 @@ app.add_middleware(
     allow_origins=settings.cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_credentials=True,
 )
 
 app.include_router(router)
+app.include_router(admin_router)
 
 web_dist = Path(settings.web_dist_dir) if settings.web_dist_dir else None
 if web_dist and web_dist.is_dir():
