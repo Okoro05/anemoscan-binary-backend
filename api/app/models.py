@@ -49,6 +49,16 @@ class CaptureImage(Base):
     capture: Mapped[Capture] = relationship(back_populates="image")
 
 
+class PatientSession(Base):
+    __tablename__ = "patient_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    capture_id: Mapped[int] = mapped_column(ForeignKey("captures.id", ondelete="CASCADE"), unique=True, index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class AdminSession(Base):
     __tablename__ = "admin_sessions"
 
