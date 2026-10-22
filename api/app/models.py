@@ -36,18 +36,25 @@ class Capture(Base):
     analyzed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
-    image: Mapped["CaptureImage | None"] = relationship(
-        back_populates="capture", uselist=False, cascade="all, delete-orphan"
-    )
+    image: Mapped["CaptureImage | None"] = relationship(back_populates="capture", uselist=False, cascade="all, delete-orphan")
 
 
 class CaptureImage(Base):
     __tablename__ = "capture_images"
 
-    capture_id: Mapped[int] = mapped_column(
-        ForeignKey("captures.id", ondelete="CASCADE"), primary_key=True
-    )
+    capture_id: Mapped[int] = mapped_column(ForeignKey("captures.id", ondelete="CASCADE"), primary_key=True)
     content_type: Mapped[str] = mapped_column(String(32))
     data: Mapped[bytes] = mapped_column(LargeBinary)
 
     capture: Mapped[Capture] = relationship(back_populates="image")
+
+
+class AdminSession(Base):
+    __tablename__ = "admin_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    csrf_token: Mapped[str] = mapped_column(String(128))
+    username: Mapped[str] = mapped_column(String(128))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
