@@ -15,6 +15,7 @@ from PIL import Image
 TMP = Path(tempfile.mkdtemp(prefix="anemoscan-tests-"))
 os.environ["DATABASE_URL"] = os.getenv("TEST_DATABASE_URL") or f"sqlite:///{TMP / 'test.db'}"
 os.environ["MODEL_PATH"] = str(TMP / "model.onnx")
+os.environ["APP_ENV"] = "development"
 os.environ.pop("WEB_DIST_DIR", None)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
