@@ -9,10 +9,11 @@ from sqlalchemy.orm import Session
 from .admin_auth import CSRF_COOKIE, SESSION_COOKIE, clear_admin_session, create_admin_session, require_admin_session, require_admin_write, validate_credentials
 from .admin_schemas import AdminLogin
 from .db import get_db
-from .models import AdminSession, Capture, utcnow
-from .routes import EXTENSIONS, get_capture_or_404, to_out
+from .models import AdminSession, Capture
+from .routes import get_capture_or_404, to_out
 
 router = APIRouter(prefix="/api/admin")
+EXTENSIONS = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
 
 
 @router.post("/login")
