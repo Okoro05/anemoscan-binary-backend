@@ -25,6 +25,13 @@ def _cookie_secure(request: Request) -> bool:
 
 
 def create_patient_session(response: Response, request: Request, db: Session, capture: Capture) -> None:
+    previous_token = request.cookies.get(SESSION_COOKIE)
+    if previous_token:
+        previous = db.scalar(select(PatientSession).where(PatientSession.token_hash == _hash_token(previous_token)))
+        if previous is not None:
+            db.delete(previous)
+            db.flush()
+
     raw_token = secrets.token_urlsafe(48)
     session = PatientSession(
         capture_id=capture.id,
