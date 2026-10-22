@@ -1,11 +1,9 @@
 import base64
 import binascii
-import csv
 import io
 import re
-import zipfile
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from PIL import Image
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
@@ -15,13 +13,13 @@ from . import inference
 from .config import settings
 from .db import get_db
 from .models import Capture, CaptureImage, utcnow
-from .schemas import CaptureCreate, CaptureList, CaptureOut, RenameIn, iso
+from .patient_auth import create_patient_session, require_patient_capture
+from .schemas import CaptureCreate, CaptureOut, iso
 
 router = APIRouter(prefix="/api")
 
 DATA_URL_RE = re.compile(r"^data:(image/(?:jpeg|jpg|png|webp));base64,(.+)$", re.DOTALL)
 ALLOWED_FORMATS = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}
-EXTENSIONS = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
 
 
 def to_out(capture: Capture) -> CaptureOut:
@@ -86,16 +84,8 @@ def health(db: Session = Depends(get_db)):
     return {"status": "ok" if database_ok else "degraded", "database": database_ok, **inference.model_info()}
 
 
-@router.get("/captures", response_model=CaptureList)
-def list_captures(limit: int = Query(8, ge=1, le=24), offset: int = Query(0, ge=0), db: Session = Depends(get_db)):
-    rows = db.scalars(
-        select(Capture).order_by(Capture.created_at.desc(), Capture.id.desc()).limit(limit).offset(offset)
-    ).all()
-    return CaptureList(captures=[to_out(row) for row in rows], has_more=len(rows) == limit)
-
-
 @router.post("/captures", response_model=CaptureOut, status_code=201)
-def create_capture(payload: CaptureCreate, db: Session = Depends(get_db)):
+def create_capture(payload: CaptureCreate, request: Request, response: Response, db: Session = Depends(get_db)):
     content_type, data = decode_image(payload.image_data)
     base = (
         db.scalar(select(func.coalesce(func.max(Capture.scan_number), 0)).where(Capture.patient_id == payload.patient_id))
@@ -122,7 +112,8 @@ def create_capture(payload: CaptureCreate, db: Session = Depends(get_db)):
         capture.image = CaptureImage(content_type=content_type, data=data)
         db.add(capture)
         try:
-            db.commit()
+            db.flush()
+            create_patient_session(response, request, db, capture)
             return to_out(capture)
         except IntegrityError:
             db.rollback()
@@ -131,39 +122,18 @@ def create_capture(payload: CaptureCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/captures/{capture_id}/image")
-def get_image(capture_id: int, db: Session = Depends(get_db)):
-    capture = get_capture_or_404(db, capture_id)
+def get_image(capture: Capture = Depends(require_patient_capture)):
     if capture.image is None:
         raise HTTPException(404, "Image not found.")
-    return Response(content=capture.image.data, media_type=capture.image.content_type, headers={"Cache-Control": "public, max-age=31536000, immutable"})
-
-
-@router.patch("/captures/{capture_id}", response_model=CaptureOut)
-def rename_capture(capture_id: int, payload: RenameIn, db: Session = Depends(get_db)):
-    capture = get_capture_or_404(db, capture_id)
-    clash = db.scalar(select(Capture.id).where(Capture.name == payload.name, Capture.id != capture_id))
-    if clash is not None:
-        raise HTTPException(409, "This name is already used by another scan.")
-    capture.name = payload.name
-    try:
-        db.commit()
-    except IntegrityError as exc:
-        db.rollback()
-        raise HTTPException(409, "This name is already used by another scan.") from exc
-    return to_out(capture)
-
-
-@router.delete("/captures/{capture_id}", status_code=204)
-def delete_capture(capture_id: int, db: Session = Depends(get_db)):
-    capture = get_capture_or_404(db, capture_id)
-    db.delete(capture)
-    db.commit()
-    return Response(status_code=204)
+    return Response(
+        content=capture.image.data,
+        media_type=capture.image.content_type,
+        headers={"Cache-Control": "private, no-store"},
+    )
 
 
 @router.post("/captures/{capture_id}/analyze", response_model=CaptureOut)
-def analyze_capture(capture_id: int, db: Session = Depends(get_db)):
-    capture = get_capture_or_404(db, capture_id)
+def analyze_capture(capture: Capture = Depends(require_patient_capture), db: Session = Depends(get_db)):
     if capture.image is None:
         raise HTTPException(404, "Image not found.")
     try:
@@ -177,33 +147,3 @@ def analyze_capture(capture_id: int, db: Session = Depends(get_db)):
     capture.analyzed_at = utcnow()
     db.commit()
     return to_out(capture)
-
-
-@router.get("/export")
-def export_dataset(db: Session = Depends(get_db)):
-    rows = db.scalars(select(Capture).order_by(Capture.patient_id, Capture.scan_number)).all()
-    csv_buffer = io.StringIO()
-    writer = csv.writer(csv_buffer)
-    writer.writerow(["patient_id", "image", "gender", "age", "scan_number", "quality_score", "anemia_detected", "anemia_probability", "anemia_status"])
-
-    archive = io.BytesIO()
-    with zipfile.ZipFile(archive, "w", zipfile.ZIP_STORED) as bundle:
-        for capture in rows:
-            if capture.image is None:
-                continue
-            filename = f"{capture.name}.{EXTENSIONS.get(capture.image.content_type, 'jpg')}"
-            bundle.writestr(f"images/{filename}", capture.image.data)
-            writer.writerow([
-                capture.patient_id,
-                filename,
-                capture.gender or "",
-                "" if capture.age is None else capture.age,
-                capture.scan_number,
-                round(capture.overall, 1),
-                "" if capture.anemia_detected is None else capture.anemia_detected,
-                "" if capture.anemia_probability is None else capture.anemia_probability,
-                capture.anemia_status or "",
-            ])
-        bundle.writestr("anemia_scans.csv", csv_buffer.getvalue())
-
-    return Response(content=archive.getvalue(), media_type="application/zip", headers={"Content-Disposition": 'attachment; filename="anemoscan-dataset.zip"'})
