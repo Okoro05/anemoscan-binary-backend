@@ -15,7 +15,7 @@ from reportlab.lib.utils import ImageReader
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .admin_auth import CSRF_COOKIE, SESSION_COOKIE, clear_admin_session, create_admin_session, require_admin_session, require_admin_write, validate_credentials
+from .admin_auth import SESSION_COOKIE, clear_admin_session, create_admin_session, require_admin_session, require_admin_write, validate_credentials
 from .admin_schemas import AdminLogin
 from .db import get_db
 from .models import AdminSession, Capture
@@ -28,6 +28,61 @@ EXTENSIONS = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
 def _safe_filename(value: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip(".-")
     return cleaned or "anemoscan-report"
+
+
+def _csv_rows(db: Session):
+    rows = db.scalars(select(Capture).order_by(Capture.patient_id, Capture.scan_number)).all()
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "capture_id",
+        "patient_id",
+        "image_filename",
+        "image_content_type",
+        "gender",
+        "age",
+        "scan_number",
+        "status",
+        "camera_label",
+        "quality_threshold",
+        "brightness",
+        "sharpness",
+        "contrast",
+        "quality_score",
+        "anemia_detected",
+        "anemia_probability",
+        "anemia_status",
+        "created_at",
+        "analyzed_at",
+    ])
+    for capture in rows:
+        image_filename = ""
+        image_content_type = ""
+        if capture.image is not None:
+            image_content_type = capture.image.content_type
+            image_filename = f"{capture.name}.{EXTENSIONS.get(capture.image.content_type, 'jpg')}"
+        writer.writerow([
+            capture.id,
+            capture.patient_id,
+            image_filename,
+            image_content_type,
+            capture.gender or "",
+            "" if capture.age is None else capture.age,
+            capture.scan_number,
+            capture.status,
+            capture.camera_label,
+            capture.threshold,
+            round(capture.brightness, 2),
+            round(capture.sharpness, 2),
+            round(capture.contrast, 2),
+            round(capture.overall, 2),
+            "" if capture.anemia_detected is None else capture.anemia_detected,
+            "" if capture.anemia_probability is None else capture.anemia_probability,
+            capture.anemia_status or "",
+            capture.created_at.isoformat(),
+            capture.analyzed_at.isoformat() if capture.analyzed_at else "",
+        ])
+    return output.getvalue()
 
 
 @router.post("/login")
@@ -142,56 +197,19 @@ def admin_report(capture_id: int, _: AdminSession = Depends(require_admin_sessio
         author="AnemoScan",
     )
     styles = getSampleStyleSheet()
-    title_style = ParagraphStyle(
-        "AnemoTitle",
-        parent=styles["Title"],
-        fontName="Helvetica-Bold",
-        fontSize=22,
-        leading=26,
-        textColor=colors.HexColor("#00a99d"),
-        alignment=TA_CENTER,
-        spaceAfter=4,
-    )
-    subtitle_style = ParagraphStyle(
-        "AnemoSubtitle",
-        parent=styles["Normal"],
-        fontName="Helvetica",
-        fontSize=9,
-        textColor=colors.HexColor("#4b5563"),
-        alignment=TA_CENTER,
-        spaceAfter=14,
-    )
-    heading_style = ParagraphStyle(
-        "AnemoHeading",
-        parent=styles["Heading2"],
-        fontName="Helvetica-Bold",
-        fontSize=12,
-        textColor=colors.HexColor("#0f172a"),
-        spaceBefore=10,
-        spaceAfter=8,
-    )
-    body_style = ParagraphStyle(
-        "AnemoBody",
-        parent=styles["Normal"],
-        fontName="Helvetica",
-        fontSize=9,
-        leading=13,
-        textColor=colors.HexColor("#334155"),
-    )
+    title_style = ParagraphStyle("AnemoTitle", parent=styles["Title"], fontName="Helvetica-Bold", fontSize=22, leading=26, textColor=colors.HexColor("#00a99d"), alignment=TA_CENTER, spaceAfter=4)
+    subtitle_style = ParagraphStyle("AnemoSubtitle", parent=styles["Normal"], fontName="Helvetica", fontSize=9, textColor=colors.HexColor("#4b5563"), alignment=TA_CENTER, spaceAfter=14)
+    heading_style = ParagraphStyle("AnemoHeading", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=12, textColor=colors.HexColor("#0f172a"), spaceBefore=10, spaceAfter=8)
+    body_style = ParagraphStyle("AnemoBody", parent=styles["Normal"], fontName="Helvetica", fontSize=9, leading=13, textColor=colors.HexColor("#334155"))
 
-    story = [
-        Paragraph("AnemoScan", title_style),
-        Paragraph("AI-powered anemia screening report", subtitle_style),
-    ]
-
+    story = [Paragraph("AnemoScan", title_style), Paragraph("AI-powered anemia screening report", subtitle_style)]
     try:
         image_reader = ImageReader(io.BytesIO(capture.image.data))
         width, height = image_reader.getSize()
         max_width = 165 * mm
         max_height = 100 * mm
         scale = min(max_width / width, max_height / height, 1)
-        image = PdfImage(image_reader, width=width * scale, height=height * scale)
-        story.extend([image, Spacer(1, 10)])
+        story.extend([PdfImage(image_reader, width=width * scale, height=height * scale), Spacer(1, 10)])
     except Exception:
         story.append(Paragraph("Stored scan image could not be embedded in this report.", body_style))
 
@@ -200,11 +218,9 @@ def admin_report(capture_id: int, _: AdminSession = Depends(require_admin_sessio
         result_text = "Anemia detected"
     elif capture.anemia_detected is False:
         result_text = "No anemia"
-
     probability = "—" if capture.anemia_probability is None else f"{capture.anemia_probability * 100:.0f}%"
     analyzed = capture.analyzed_at.isoformat() if capture.analyzed_at else "Not analyzed"
     created = capture.created_at.isoformat() if capture.created_at else "—"
-
     story.append(Paragraph("Screening details", heading_style))
     data = [
         ["Patient ID", capture.patient_id],
@@ -229,20 +245,9 @@ def admin_report(capture_id: int, _: AdminSession = Depends(require_admin_sessio
         ("TOPPADDING", (0, 0), (-1, -1), 7),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
     ]))
-    story.extend([table, Spacer(1, 12)])
-    story.append(Paragraph(
-        "Prototype screening result only. This AI result is not a diagnosis and should be confirmed with an appropriate clinical assessment and hemoglobin/laboratory testing.",
-        body_style,
-    ))
+    story.extend([table, Spacer(1, 12), Paragraph("Prototype screening result only. This AI result is not a diagnosis and should be confirmed with an appropriate clinical assessment and hemoglobin/laboratory testing.", body_style)])
     document.build(story)
-    return Response(
-        content=archive.getvalue(),
-        media_type="application/pdf",
-        headers={
-            "Content-Disposition": f'attachment; filename="{_safe_filename(capture.name)}-report.pdf"',
-            "Cache-Control": "private, no-store",
-        },
-    )
+    return Response(content=archive.getvalue(), media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{_safe_filename(capture.name)}-report.pdf"', "Cache-Control": "private, no-store"})
 
 
 @router.delete("/captures/{capture_id}", status_code=204)
@@ -253,12 +258,18 @@ def admin_delete_capture(capture_id: int, _: AdminSession = Depends(require_admi
     return Response(status_code=204)
 
 
+@router.get("/export.csv")
+def admin_export_csv(_: AdminSession = Depends(require_admin_session), db: Session = Depends(get_db)):
+    return Response(
+        content="\ufeff" + _csv_rows(db),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="anemoscan-admin-export.csv"', "Cache-Control": "private, no-store"},
+    )
+
+
 @router.get("/export")
 def admin_export(_: AdminSession = Depends(require_admin_session), db: Session = Depends(get_db)):
     rows = db.scalars(select(Capture).order_by(Capture.patient_id, Capture.scan_number)).all()
-    csv_buffer = io.StringIO()
-    writer = csv.writer(csv_buffer)
-    writer.writerow(["patient_id", "image", "gender", "age", "scan_number", "quality_score", "anemia_detected", "anemia_probability", "anemia_status", "created_at"])
     archive = io.BytesIO()
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_STORED) as bundle:
         for capture in rows:
@@ -266,6 +277,5 @@ def admin_export(_: AdminSession = Depends(require_admin_session), db: Session =
                 continue
             filename = f"{capture.name}.{EXTENSIONS.get(capture.image.content_type, 'jpg')}"
             bundle.writestr(f"images/{filename}", capture.image.data)
-            writer.writerow([capture.patient_id, filename, capture.gender or "", "" if capture.age is None else capture.age, capture.scan_number, round(capture.overall, 1), capture.anemia_detected, capture.anemia_probability, capture.anemia_status or "", capture.created_at.isoformat()])
-        bundle.writestr("anemia_scans.csv", csv_buffer.getvalue())
+        bundle.writestr("anemia_scans.csv", _csv_rows(db))
     return Response(content=archive.getvalue(), media_type="application/zip", headers={"Content-Disposition": 'attachment; filename="anemoscan-admin-export.zip"', "Cache-Control": "private, no-store"})
