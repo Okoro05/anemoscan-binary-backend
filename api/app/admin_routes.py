@@ -1,8 +1,17 @@
 import csv
 import io
+import re
 import zipfile
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import mm
+from reportlab.platypus import Image as PdfImage
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.lib.utils import ImageReader
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -14,6 +23,11 @@ from .routes import get_capture_or_404, to_out
 
 router = APIRouter(prefix="/api/admin")
 EXTENSIONS = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
+
+
+def _safe_filename(value: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip(".-")
+    return cleaned or "anemoscan-report"
 
 
 @router.post("/login")
@@ -108,6 +122,127 @@ def admin_image(capture_id: int, _: AdminSession = Depends(require_admin_session
     if capture.image is None:
         raise HTTPException(404, "Image not found.")
     return Response(content=capture.image.data, media_type=capture.image.content_type, headers={"Cache-Control": "private, no-store"})
+
+
+@router.get("/captures/{capture_id}/report")
+def admin_report(capture_id: int, _: AdminSession = Depends(require_admin_session), db: Session = Depends(get_db)):
+    capture = get_capture_or_404(db, capture_id)
+    if capture.image is None:
+        raise HTTPException(404, "Image not found.")
+
+    archive = io.BytesIO()
+    document = SimpleDocTemplate(
+        archive,
+        pagesize=A4,
+        rightMargin=18 * mm,
+        leftMargin=18 * mm,
+        topMargin=18 * mm,
+        bottomMargin=18 * mm,
+        title=f"AnemoScan report - {capture.name}",
+        author="AnemoScan",
+    )
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        "AnemoTitle",
+        parent=styles["Title"],
+        fontName="Helvetica-Bold",
+        fontSize=22,
+        leading=26,
+        textColor=colors.HexColor("#00a99d"),
+        alignment=TA_CENTER,
+        spaceAfter=4,
+    )
+    subtitle_style = ParagraphStyle(
+        "AnemoSubtitle",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=9,
+        textColor=colors.HexColor("#4b5563"),
+        alignment=TA_CENTER,
+        spaceAfter=14,
+    )
+    heading_style = ParagraphStyle(
+        "AnemoHeading",
+        parent=styles["Heading2"],
+        fontName="Helvetica-Bold",
+        fontSize=12,
+        textColor=colors.HexColor("#0f172a"),
+        spaceBefore=10,
+        spaceAfter=8,
+    )
+    body_style = ParagraphStyle(
+        "AnemoBody",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=9,
+        leading=13,
+        textColor=colors.HexColor("#334155"),
+    )
+
+    story = [
+        Paragraph("AnemoScan", title_style),
+        Paragraph("AI-powered anemia screening report", subtitle_style),
+    ]
+
+    try:
+        image_reader = ImageReader(io.BytesIO(capture.image.data))
+        width, height = image_reader.getSize()
+        max_width = 165 * mm
+        max_height = 100 * mm
+        scale = min(max_width / width, max_height / height, 1)
+        image = PdfImage(image_reader, width=width * scale, height=height * scale)
+        story.extend([image, Spacer(1, 10)])
+    except Exception:
+        story.append(Paragraph("Stored scan image could not be embedded in this report.", body_style))
+
+    result_text = "Not analyzed"
+    if capture.anemia_detected is True:
+        result_text = "Anemia detected"
+    elif capture.anemia_detected is False:
+        result_text = "No anemia"
+
+    probability = "—" if capture.anemia_probability is None else f"{capture.anemia_probability * 100:.0f}%"
+    analyzed = capture.analyzed_at.isoformat() if capture.analyzed_at else "Not analyzed"
+    created = capture.created_at.isoformat() if capture.created_at else "—"
+
+    story.append(Paragraph("Screening details", heading_style))
+    data = [
+        ["Patient ID", capture.patient_id],
+        ["Scan", f"{capture.name} (#{capture.scan_number})"],
+        ["Age / gender", f"{capture.age if capture.age is not None else '—'} / {capture.gender or '—'}"],
+        ["Image quality", f"{capture.overall:.0f}/100"],
+        ["AI result", result_text],
+        ["AI probability", probability],
+        ["AI threshold", "50%"],
+        ["Created", created],
+        ["Analyzed", analyzed],
+    ]
+    table = Table(data, colWidths=[42 * mm, 125 * mm], hAlign="LEFT")
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#e8fffb")),
+        ("TEXTCOLOR", (0, 0), (-1, -1), colors.HexColor("#1f2937")),
+        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+        ("FONTNAME", (1, 0), (1, -1), "Helvetica"),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cbd5e1")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING", (0, 0), (-1, -1), 7),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+    ]))
+    story.extend([table, Spacer(1, 12)])
+    story.append(Paragraph(
+        "Prototype screening result only. This AI result is not a diagnosis and should be confirmed with an appropriate clinical assessment and hemoglobin/laboratory testing.",
+        body_style,
+    ))
+    document.build(story)
+    return Response(
+        content=archive.getvalue(),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{_safe_filename(capture.name)}-report.pdf"',
+            "Cache-Control": "private, no-store",
+        },
+    )
 
 
 @router.delete("/captures/{capture_id}", status_code=204)
