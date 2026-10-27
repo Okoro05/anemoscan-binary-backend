@@ -17,7 +17,12 @@ def normalize_database_url(url: str) -> str:
 class Settings:
     def __init__(self) -> None:
         self.database_url = normalize_database_url(os.getenv("DATABASE_URL", f"sqlite:///{BASE_DIR / 'anemoscan.db'}"))
-        self.model_path = Path(os.getenv("MODEL_PATH", str(BASE_DIR / "model" / "model.onnx")))
+        self.model_path = Path(
+            os.getenv(
+                "MODEL_PATH",
+                str(BASE_DIR / "model" / "anemoscan_color_feature_random_forest.joblib"),
+            )
+        )
         origins = os.getenv("CORS_ORIGINS", "*")
         self.cors_origins = [item.strip() for item in origins.split(",") if item.strip()]
         self.max_image_bytes = int(os.getenv("MAX_IMAGE_BYTES", str(8 * 1024 * 1024)))
