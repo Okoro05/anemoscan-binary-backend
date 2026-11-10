@@ -4,12 +4,13 @@ import io
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from pydantic import BaseModel, ConfigDict, Field
 from PIL import Image
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from . import inference
+from . import eye_state_inference, inference
 from .config import settings
 from .db import get_db
 from .models import Capture, CaptureImage, utcnow
@@ -20,6 +21,13 @@ router = APIRouter(prefix="/api")
 
 DATA_URL_RE = re.compile(r"^data:(image/(?:jpeg|jpg|png|webp));base64,(.+)$", re.DOTALL)
 ALLOWED_FORMATS = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}
+
+
+class EyeStatePredictRequest(BaseModel):
+    """Image request for the independent eye-state classifier."""
+
+    model_config = ConfigDict(populate_by_name=True)
+    image_data: str = Field(alias="imageData")
 
 
 def to_out(capture: Capture) -> CaptureOut:
@@ -81,7 +89,34 @@ def health(db: Session = Depends(get_db)):
         database_ok = True
     except Exception:
         database_ok = False
-    return {"status": "ok" if database_ok else "degraded", "database": database_ok, **inference.model_info()}
+    return {
+        "status": "ok" if database_ok else "degraded",
+        "database": database_ok,
+        **inference.model_info(),
+        **eye_state_inference.model_info(),
+    }
+
+
+@router.post("/eye-state/predict")
+def predict_eye_state(payload: EyeStatePredictRequest):
+    """Classify whether the supplied image shows an open or closed eye."""
+    _, image_bytes = decode_image(payload.image_data)
+    try:
+        prediction = eye_state_inference.predict(image_bytes)
+    except eye_state_inference.EyeStateInferenceError as exc:
+        raise HTTPException(exc.status_code, exc.detail) from exc
+
+    return {
+        "eye_state": prediction.eye_state,
+        "confidence": prediction.confidence,
+        "probabilities": prediction.probabilities,
+        "model_type": "eye-state",
+        "message": (
+            "Open eye detected."
+            if prediction.eye_state == "open_eye"
+            else "Closed eye detected. Please open your eyes."
+        ),
+    }
 
 
 @router.post("/captures", response_model=CaptureOut, status_code=201)
