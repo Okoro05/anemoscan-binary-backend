@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from . import inference
+from . import eye_state_inference, inference
 from .admin_routes import router as admin_router
 from .config import settings
 from .db import init_db
@@ -17,8 +17,13 @@ from .routes import router
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
+    # Keep the existing anemia model independent from the eye-state model.
     if settings.model_path.exists():
         inference.get_session()
+    # Eye-state inference is optional during deployment; its endpoint returns
+    # a clear 503 response if the separate artifact has not been deployed yet.
+    if settings.eye_state_model_path.exists():
+        eye_state_inference.get_session()
     yield
 
 
