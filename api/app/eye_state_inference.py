@@ -69,9 +69,11 @@ def _load_metadata() -> dict[str, Any]:
         raise EyeStateInferenceError(500, "Eye-state metadata has an unsupported input shape.")
     if metadata.get("input_color") != "RGB":
         raise EyeStateInferenceError(500, "Eye-state model must use RGB input.")
-    if not np.allclose(metadata.get("normalization_mean", []), IMAGENET_MEAN, rtol=0.0, atol=1e-7):
+    mean = np.asarray(metadata.get("normalization_mean", []), dtype=np.float32)
+    std = np.asarray(metadata.get("normalization_std", []), dtype=np.float32)
+    if mean.shape != (3,) or not np.allclose(mean, IMAGENET_MEAN, rtol=0.0, atol=1e-7):
         raise EyeStateInferenceError(500, "Eye-state normalization mean does not match the training pipeline.")
-    if not np.allclose(metadata.get("normalization_std", []), IMAGENET_STD, rtol=0.0, atol=1e-7):
+    if std.shape != (3,) or not np.allclose(std, IMAGENET_STD, rtol=0.0, atol=1e-7):
         raise EyeStateInferenceError(500, "Eye-state normalization standard deviation does not match the training pipeline.")
     return metadata
 
