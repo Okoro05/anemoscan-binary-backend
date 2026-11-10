@@ -7,7 +7,10 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from api.app import eye_state_inference as eye
+try:
+    from api.app import eye_state_inference as eye
+except ModuleNotFoundError:
+    from app import eye_state_inference as eye
 
 
 class FakeValue:
