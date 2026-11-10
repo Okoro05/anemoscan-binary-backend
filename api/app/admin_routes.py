@@ -9,11 +9,15 @@ from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
-from reportlab.platypus import Image as PdfImage
+from reportlab.platypus import Flowable, Image as PdfImage
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.graphics import renderPDF
+from svglib.svglib import svg2rlg
 from reportlab.lib.utils import ImageReader
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+
+from pathlib import Path
 
 from .admin_auth import SESSION_COOKIE, clear_admin_session, create_admin_session, require_admin_session, require_admin_write, validate_credentials
 from .admin_schemas import AdminLogin
@@ -23,6 +27,29 @@ from .routes import get_capture_or_404, to_out
 
 router = APIRouter(prefix="/api/admin")
 EXTENSIONS = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
+
+BRANDING_LOGO = Path(__file__).resolve().parent / "assets" / "anemoscan-logo.svg"
+
+
+class ReportLogo(Flowable):
+    """Render the repository's AnemoScan SVG wordmark in generated PDF reports."""
+
+    def __init__(self, max_width: float = 150 * mm):
+        super().__init__()
+        drawing = svg2rlg(str(BRANDING_LOGO))
+        if drawing is None or not drawing.width or not drawing.height:
+            raise ValueError("AnemoScan report logo could not be loaded.")
+        self.drawing = drawing
+        self.scale_factor = min(max_width / drawing.width, 1.0)
+        self.width = drawing.width * self.scale_factor
+        self.height = drawing.height * self.scale_factor
+
+    def draw(self):
+        self.canv.saveState()
+        self.canv.scale(self.scale_factor, self.scale_factor)
+        renderPDF.draw(self.drawing, self.canv, 0, 0)
+        self.canv.restoreState()
+
 
 
 def _safe_filename(value: str) -> str:
@@ -202,7 +229,14 @@ def admin_report(capture_id: int, _: AdminSession = Depends(require_admin_sessio
     heading_style = ParagraphStyle("AnemoHeading", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=12, textColor=colors.HexColor("#0f172a"), spaceBefore=10, spaceAfter=8)
     body_style = ParagraphStyle("AnemoBody", parent=styles["Normal"], fontName="Helvetica", fontSize=9, leading=13, textColor=colors.HexColor("#334155"))
 
-    story = [Paragraph("AnemoScan", title_style), Paragraph("AI-powered anemia screening report", subtitle_style)]
+    story = []
+    try:
+        story.extend([ReportLogo(), Spacer(1, 5)])
+    except Exception:
+        # Keep report generation available if an SVG renderer cannot parse
+        # a future logo revision. The text wordmark remains the fallback.
+        story.append(Paragraph("AnemoScan", title_style))
+    story.append(Paragraph("AI-powered anemia screening report", subtitle_style))
     try:
         image_reader = ImageReader(io.BytesIO(capture.image.data))
         width, height = image_reader.getSize()
