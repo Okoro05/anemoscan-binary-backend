@@ -49,7 +49,7 @@ def test_fresh_browser_cannot_access_another_patients_image(client):
 
 def test_patient_library_and_dataset_routes_are_not_public(client):
     create(client)
-    assert client.get("/api/captures").status_code == 404
+    assert client.get("/api/captures").status_code == 405
     assert client.get("/api/export").status_code == 404
     assert client.patch("/api/captures/1", json={"name": "renamed"}).status_code == 404
     assert client.delete("/api/captures/1").status_code == 404
