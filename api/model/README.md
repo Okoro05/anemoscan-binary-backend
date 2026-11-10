@@ -1,7 +1,11 @@
 # AnemoScan Binary Model
 
-Place the final binary anemia classification model at:
+The binary anemia classifier is already stored at:
 
 `api/model/model.onnx`
 
-This folder is intentionally kept in the repository so the model can be uploaded here.
+This is the anemia prediction model. Do not replace it with the separate eye-state model.
+
+GitHub displays **Add file via upload** on directories because it allows additional files to be added. It is not an outstanding task when the model file is already present. Upload a replacement only when a newly trained and validated anemia model is ready.
+
+The eye-state model is stored separately in `api/model/eye_state/`.
