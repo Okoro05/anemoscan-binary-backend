@@ -95,3 +95,42 @@ def test_metadata_loader_accepts_training_metadata(tmp_path, monkeypatch):
 
     assert loaded["classes"]["0"] == "open_eye"
     assert loaded["classes"]["1"] == "closed_eye"
+
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("input_shape", [1, 3, 192, 192]),
+        ("normalization_mean", [0.5, 0.4]),
+        ("normalization_mean", [0.485, "invalid", 0.406]),
+        ("normalization_std", [0.229, 0.224, 0.0]),
+        ("classes", {"0": "closed_eye", "1": "open_eye"}),
+    ],
+)
+def test_metadata_loader_rejects_invalid_shape_or_normalization(field, value, tmp_path, monkeypatch):
+    metadata = {
+        "model_name": "AnemoScan Eye-State Classifier",
+        "architecture": "MobileNetV3-Small",
+        "classes": {"0": "open_eye", "1": "closed_eye"},
+        "input_shape": [1, 3, 224, 224],
+        "input_color": "RGB",
+        "normalization_mean": [0.485, 0.456, 0.406],
+        "normalization_std": [0.229, 0.224, 0.225],
+    }
+    metadata[field] = value
+    path = tmp_path / "model_metadata.json"
+    path.write_text(json.dumps(metadata), encoding="utf-8")
+    monkeypatch.setattr(eye.settings, "eye_state_metadata_path", path)
+
+    with pytest.raises(eye.EyeStateInferenceError):
+        eye._load_metadata()
+
+
+def test_metadata_loader_rejects_non_object_json(tmp_path, monkeypatch):
+    path = tmp_path / "model_metadata.json"
+    path.write_text(json.dumps(["not", "an", "object"]), encoding="utf-8")
+    monkeypatch.setattr(eye.settings, "eye_state_metadata_path", path)
+
+    with pytest.raises(eye.EyeStateInferenceError):
+        eye._load_metadata()
