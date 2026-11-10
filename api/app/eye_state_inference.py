@@ -62,19 +62,33 @@ def _load_metadata() -> dict[str, Any]:
     except (OSError, json.JSONDecodeError) as exc:
         raise EyeStateInferenceError(500, "Eye-state model metadata could not be read.") from exc
 
-    classes = metadata.get("classes", {})
-    if classes.get("0") != "open_eye" or classes.get("1") != "closed_eye":
+    if not isinstance(metadata, dict):
+        raise EyeStateInferenceError(500, "Eye-state metadata must be a JSON object.")
+
+    classes = metadata.get("classes")
+    if not isinstance(classes, dict) or classes.get("0") != "open_eye" or classes.get("1") != "closed_eye":
         raise EyeStateInferenceError(500, "Eye-state metadata must define 0=open_eye and 1=closed_eye.")
-    if metadata.get("input_shape") != [1, 3, IMAGE_SIZE, IMAGE_SIZE]:
-        raise EyeStateInferenceError(500, "Eye-state metadata has an unsupported input shape.")
+
+    input_shape = metadata.get("input_shape")
+    if input_shape != [1, 3, IMAGE_SIZE, IMAGE_SIZE]:
+        raise EyeStateInferenceError(500, "Eye-state metadata input_shape must be [1, 3, 224, 224].")
     if metadata.get("input_color") != "RGB":
         raise EyeStateInferenceError(500, "Eye-state model must use RGB input.")
-    mean = np.asarray(metadata.get("normalization_mean", []), dtype=np.float32)
-    std = np.asarray(metadata.get("normalization_std", []), dtype=np.float32)
-    if mean.shape != (3,) or not np.allclose(mean, IMAGENET_MEAN, rtol=0.0, atol=1e-7):
-        raise EyeStateInferenceError(500, "Eye-state normalization mean does not match the training pipeline.")
-    if std.shape != (3,) or not np.allclose(std, IMAGENET_STD, rtol=0.0, atol=1e-7):
-        raise EyeStateInferenceError(500, "Eye-state normalization standard deviation does not match the training pipeline.")
+
+    try:
+        mean = np.asarray(metadata.get("normalization_mean"), dtype=np.float32)
+        std = np.asarray(metadata.get("normalization_std"), dtype=np.float32)
+    except (TypeError, ValueError) as exc:
+        raise EyeStateInferenceError(500, "Eye-state normalization metadata must contain numeric RGB values.") from exc
+
+    if mean.shape != (3,) or not np.isfinite(mean).all() or not np.allclose(
+        mean, IMAGENET_MEAN, rtol=0.0, atol=1e-7
+    ):
+        raise EyeStateInferenceError(500, "Eye-state normalization mean must match the training pipeline.")
+    if std.shape != (3,) or not np.isfinite(std).all() or not np.allclose(
+        std, IMAGENET_STD, rtol=0.0, atol=1e-7
+    ):
+        raise EyeStateInferenceError(500, "Eye-state normalization standard deviation must match the training pipeline.")
     return metadata
 
 
